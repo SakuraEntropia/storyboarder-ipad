@@ -163,7 +163,7 @@ function paint() {
     const cv = getCv(f, n, false);
     if (cv) ctx.drawImage(cv, 0, 0);
   }
-  if (S.captions && f.dialogue) drawCaption(ctx, f.dialogue, 1);
+  if (S.captions && f.dialogue) drawCaption(ctx, f.dialogue, W, H);
   drawGuides();
 }
 
@@ -206,7 +206,8 @@ function drawGuides() {
   ctx.restore();
 }
 
-function drawCaption(c, text, scale) {
+function drawCaption(c, text, width, height) {
+  const scale = width / W;
   const fs = 30 * scale, pad = 18 * scale, maxW = W - 200 * scale;
   const font = '400 ' + fs + 'px thicccboi, -apple-system, sans-serif';
   c.save();
@@ -422,6 +423,13 @@ async function undo() { const e = rt.undo.pop(); if (!e) return; rt.redo.push(e)
 async function redo() { const e = rt.redo.pop(); if (!e) return; rt.undo.push(e); await restoreKey(e.key, e.after); }
 
 /* ---------------- drawing ---------------- */
+function nativeWake(on) {
+  try {
+    const h = window.webkit && window.webkit.messageHandlers;
+    if (h && h.wake) h.wake.postMessage(!!on);
+  } catch (_) {}
+}
+
 function toPt(e) {
   const r = view.getBoundingClientRect();
   let p = e.pressure;
@@ -486,6 +494,7 @@ const STROKE_OPACITY = 1;
 function endStroke() {
   const a = rt.active; if (!a) return;
   rt.active = null;
+  nativeWake(false);
   const after = a.lc.toDataURL('image/png');
   pushUndo(a.key, a.before, after);
   rt.snap.set(a.key, after);
@@ -510,6 +519,7 @@ view.addEventListener('pointerdown', e => {
   if (tool && tool.layer) { layer = tool.layer; S.layer = layer; }
   const lc = getCv(f, layer, true);
   const lctx = lc.getContext('2d');
+  nativeWake(true);
   const p = toPt(e);
   const key = f.id + ':' + layer;
   const before = beforeFor(key, lc);
@@ -594,7 +604,12 @@ function serialize() {
 function scheduleSave() { clearTimeout(rt.saveT); rt.saveT = setTimeout(saveNow, 700); }
 async function saveNow() {
   if (!S.project) return;
-  try { await dbPut('project', serialize()); } catch (_) {}
+  const p = serialize();
+  try { await dbPut('project', p); } catch (_) {}
+  try {
+    const h = window.webkit && window.webkit.messageHandlers;
+    if (h && h.backup) h.backup.postMessage(JSON.stringify(p));
+  } catch (_) {}
 }
 
 /* ---------------- export ---------------- */
@@ -691,11 +706,36 @@ function zipStore(entries) {
   return concat([...parts, ...central, eocd]);
 }
 
+function inNative() {
+  return !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.share);
+}
 function canShareFiles() {
   return !!(window.isSecureContext && navigator.canShare && navigator.share);
 }
+function bytesToB64(u8) {
+  let out = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < u8.length; i += chunk) {
+    out += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+  }
+  return btoa(out);
+}
+
+async function nativeDeliver(arr) {
+  try {
+    const h = window.webkit && window.webkit.messageHandlers;
+    if (!h || !h.share) return false;
+    for (const f of arr) {
+      const buf = await f.arrayBuffer();
+      h.share.postMessage({ name: f.name, type: f.type || 'application/octet-stream', base64: bytesToB64(new Uint8Array(buf)) });
+    }
+    return true;
+  } catch (_) { return false; }
+}
+
 async function deliver(files) {
   const arr = Array.isArray(files) ? files : [files];
+  if (await nativeDeliver(arr)) return;
   try {
     if (canShareFiles() && navigator.canShare({ files: arr })) {
       const r = await Promise.race([
@@ -725,7 +765,7 @@ async function compositeFrame(f) {
     const im = await loadImg(url);
     if (im) tctx.drawImage(im, 0, 0);
   }
-  if (S.captions && f.dialogue) drawCaption(tctx, f.dialogue, 1);
+  if (S.captions && f.dialogue) drawCaption(tctx, f.dialogue, W, H);
   return tmp;
 }
 
@@ -751,8 +791,8 @@ async function exportPNG() {
         data: b64ToBytes(tmp.toDataURL('image/png').split(',')[1])
       });
     }
-    if (canShareFiles()) {
-      await deliver(entries.map(e => new File([e.data], e.name, { type: 'image/png' })));
+    if (entries.length === 1) {
+      await deliver(new File([entries[0].data], entries[0].name, { type: 'image/png' }));
     } else {
       await deliver(new File([zipStore(entries)], safeName() + '-png.zip', { type: 'application/zip' }));
     }
@@ -771,6 +811,239 @@ async function importJSON(file) {
   applyProject(p);
   await select(0);
   await dbPut('project', serialize());
+}
+
+
+/* ---------------- richer exports ---------------- */
+const GIF_PAL = (() => {
+  const p = new Uint8Array(768);
+  for (let i = 0; i < 256; i++) {
+    p[i * 3] = Math.round(((i >> 5) & 7) * 255 / 7);
+    p[i * 3 + 1] = Math.round(((i >> 2) & 7) * 255 / 7);
+    p[i * 3 + 2] = Math.round((i & 3) * 255 / 3);
+  }
+  return p;
+})();
+
+function gifLZW(pixels) {
+  const minCode = 8, clear = 1 << minCode, eoi = clear + 1;
+  const out = [];
+  let size = minCode + 1, nextCode = eoi + 1, cur = 0, bits = 0;
+  let dict = new Map();
+  const emit = code => {
+    cur |= code << bits; bits += size;
+    while (bits >= 8) { out.push(cur & 0xff); cur >>= 8; bits -= 8; }
+  };
+  emit(clear);
+  let prefix = pixels[0];
+  for (let i = 1; i < pixels.length; i++) {
+    const k = pixels[i];
+    const key = (prefix << 8) | k;
+    const found = dict.get(key);
+    if (found !== undefined) { prefix = found; continue; }
+    emit(prefix);
+    if (nextCode < 4096) {
+      dict.set(key, nextCode++);
+      if (nextCode > (1 << size) && size < 12) size++;
+    } else {
+      emit(clear);
+      dict = new Map(); nextCode = eoi + 1; size = minCode + 1;
+    }
+    prefix = k;
+  }
+  emit(prefix); emit(eoi);
+  if (bits > 0) out.push(cur & 0xff);
+  return out;
+}
+
+function buildGIF(frames) {
+  const w = frames[0].w, h = frames[0].h;
+  const out = [];
+  const pushStr = s => { for (let i = 0; i < s.length; i++) out.push(s.charCodeAt(i)); };
+  pushStr('GIF89a');
+  out.push(w & 255, (w >> 8) & 255, h & 255, (h >> 8) & 255, 0xF7, 0, 0);
+  for (let i = 0; i < 768; i++) out.push(GIF_PAL[i]);
+  // loop forever
+  out.push(0x21, 0xFF, 0x0B); pushStr('NETSCAPE2.0');
+  out.push(0x03, 0x01, 0x00, 0x00, 0x00);
+  for (const fr of frames) {
+    out.push(0x21, 0xF9, 0x04, 0x04, fr.delay & 255, (fr.delay >> 8) & 255, 0x00, 0x00);
+    out.push(0x2C, 0x00, 0x00, 0x00, 0x00, w & 255, (w >> 8) & 255, h & 255, (h >> 8) & 255, 0x00);
+    out.push(0x08);
+    const data = gifLZW(fr.pixels);
+    for (let i = 0; i < data.length; i += 255) {
+      const chunk = data.slice(i, i + 255);
+      out.push(chunk.length);
+      for (const b of chunk) out.push(b);
+    }
+    out.push(0x00);
+  }
+  out.push(0x3B);
+  return new Uint8Array(out);
+}
+
+function showBusy(text) {
+  $('#busyText').textContent = text || '处理中…';
+  setBusy(0, text || '处理中…');
+  $('#busy').classList.remove('hidden');
+}
+function setBusy(p, text) {
+  $('#busyFill').style.width = Math.round(clamp(p, 0, 1) * 100) + '%';
+  if (text) $('#busyText').textContent = text;
+}
+function hideBusy() { $('#busy').classList.add('hidden'); }
+
+async function renderBoardCanvas(f, width) {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = Math.round(width * H / W);
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+  for (const n of LAYERS) {
+    const cv = getCv(f, n, false);
+    if (cv) { g.drawImage(cv, 0, 0, c.width, c.height); continue; }
+    const url = f.layers[n];
+    if (!url) continue;
+    const im = await loadImg(url);
+    if (im) g.drawImage(im, 0, 0, c.width, c.height);
+  }
+  if (S.captions && f.dialogue) drawCaption(g, f.dialogue, c.width, c.height);
+  return c;
+}
+
+async function exportGIF() {
+  const frames = S.project.frames;
+  showBusy('准备 GIF…');
+  try {
+    const out = [];
+    for (let i = 0; i < frames.length; i++) {
+      setBusy((i / frames.length) * 0.9, '渲染画板 ' + (i + 1) + ' / ' + frames.length);
+      const c = await renderBoardCanvas(frames[i], 480);
+      const data = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const px = new Uint8Array(c.width * c.height);
+      for (let p = 0, k = 0; p < data.length; p += 4, k++) {
+        px[k] = ((data[p] >> 5) << 5) | ((data[p + 1] >> 5) << 2) | (data[p + 2] >> 6);
+      }
+      out.push({ w: c.width, h: c.height, pixels: px, delay: clamp(Math.round((frames[i].durationMs || 2000) / 10), 2, 400) });
+    }
+    setBusy(0.95, '编码 GIF…');
+    const bytes = buildGIF(out);
+    hideBusy();
+    await deliver(new File([bytes], safeName() + '.gif', { type: 'image/gif' }));
+  } catch (e) { hideBusy(); alert('GIF 导出失败: ' + e.message); }
+}
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+async function exportWeb() {
+  const frames = S.project.frames;
+  showBusy('生成网页…');
+  try {
+    const boards = [];
+    for (let i = 0; i < frames.length; i++) {
+      setBusy((i / frames.length) * 0.9, '渲染画板 ' + (i + 1) + ' / ' + frames.length);
+      const c = await renderBoardCanvas(frames[i], 960);
+      boards.push({ img: c.toDataURL('image/jpeg', 0.85), n: i + 1, f: frames[i] });
+    }
+    const title = escHtml(S.project.title || 'Storyboard');
+    const total = frames.reduce((a, f) => a + (f.durationMs || 2000), 0);
+    const body = boards.map(b => {
+      const f = b.f;
+      return '<figure class="board" id="b' + b.n + '">' +
+        '<img src="' + b.img + '" alt="Board ' + b.n + '">' +
+        '<figcaption><span class="n">' + b.n + ' · Shot ' + escHtml(f.shot) + '</span>' +
+        '<span class="meta">' + ((f.durationMs || 2000) / 1000).toFixed(2) + 's</span>' +
+        (f.action ? '<p class="action">' + escHtml(f.action) + '</p>' : '') +
+        (f.dialogue ? '<p class="dialogue">“' + escHtml(f.dialogue) + '”</p>' : '') +
+        (f.notes ? '<p class="notes">' + escHtml(f.notes) + '</p>' : '') +
+        '</figcaption></figure>';
+    }).join('\n');
+    const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>' + title + '</title><style>' +
+      'body{margin:0;background:#2b2b2b;color:#ddd;font:14px/1.5 -apple-system,"PingFang SC",sans-serif}' +
+      'header{padding:28px 6vw 8px;border-bottom:1px solid #ffffff14}' +
+      'h1{margin:0;font-size:26px;font-weight:700;letter-spacing:.02em}' +
+      '.sub{color:#8d8d8d;margin-top:6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase}' +
+      'main{max-width:1100px;margin:0 auto;padding:24px 6vw 80px}' +
+      '.board{margin:0 0 34px;background:#333;border:1px solid #ffffff10;border-radius:4px;overflow:hidden;box-shadow:0 4px 20px #0006}' +
+      '.board img{display:block;width:100%;height:auto;background:#fff}' +
+      'figcaption{padding:12px 14px 14px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}' +
+      '.n{color:#c5c41d;font-weight:700;letter-spacing:.04em}' +
+      '.meta{color:#8d8d8d;font-size:12px}' +
+      '.action,.dialogue,.notes{flex-basis:100%;margin:2px 0 0;color:#c9c9c9}' +
+      '.dialogue{color:#fff;font-style:italic}' +
+      '.notes{color:#8d8d8d;font-size:12px}' +
+      'footer{color:#777;font-size:11px;text-align:center;padding:0 0 40px}' +
+      '@media print{body{background:#fff;color:#111}.board{break-inside:avoid;box-shadow:none;border-color:#ddd}.board img{width:100%}header{border-color:#ddd}.n{color:#333}}' +
+      '</style></head><body><header><h1>' + title + '</h1><div class="sub">' + boards.length + ' boards · ' +
+      fmt(total) + ' · ' + S.project.fps + ' fps</div></header><main>' + body + '</main>' +
+      '<footer>Exported from Storyboarder for iPad</footer></body></html>';
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    hideBusy();
+    await deliver(new File([blob], safeName() + '-web.html', { type: 'text/html' }));
+  } catch (e) { hideBusy(); alert('网页导出失败: ' + e.message); }
+}
+
+function fountainText() {
+  const lines = [];
+  lines.push('Title: ' + (S.project.title || 'Untitled'));
+  lines.push('Credit: Exported from Storyboarder for iPad');
+  lines.push('Draft date: ' + new Date().toISOString().slice(0, 10));
+  lines.push('');
+  S.project.frames.forEach((f, i) => {
+    const dur = ((f.durationMs || 2000) / 1000).toFixed(2);
+    lines.push('/* SHOT ' + (f.shot || (i + 1)) + ' — ' + dur + 's' + (f.newShot ? ' (new shot)' : '') + ' */');
+    if (f.action) { lines.push(f.action.trim()); lines.push(''); }
+    if (f.dialogue) { lines.push('> ' + f.dialogue.trim()); lines.push(''); }
+    if (f.notes) { lines.push('[[' + f.notes.trim() + ']]'); lines.push(''); }
+  });
+  return lines.join('\n');
+}
+
+function csvText() {
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const rows = [['Board', 'Shot', 'NewShot', 'DurationMs', 'DurationFrames', 'Dialogue', 'Action', 'Notes'].map(q).join(',')];
+  S.project.frames.forEach((f, i) => {
+    const ms = f.durationMs || 2000;
+    rows.push([i + 1, f.shot || '', f.newShot ? 'yes' : 'no', ms, Math.round(ms / 1000 * S.project.fps), f.dialogue || '', f.action || '', f.notes || ''].map(q).join(','));
+  });
+  return '\ufeff' + rows.join('\r\n') + '\r\n';
+}
+
+async function exportFountain() {
+  const blob = new Blob([fountainText()], { type: 'text/plain;charset=utf-8' });
+  await deliver(new File([blob], safeName() + '.fountain', { type: 'text/plain' }));
+}
+
+async function exportCSV() {
+  const blob = new Blob([csvText()], { type: 'text/csv;charset=utf-8' });
+  await deliver(new File([blob], safeName() + '-shotlist.csv', { type: 'text/csv' }));
+}
+
+async function exportVideo() {
+  if (!inNative() || !window.webkit.messageHandlers.video) {
+    alert('MP4 导出在 iPad App 版里（原生编码）。网页版请用 Animated GIF。');
+    return;
+  }
+  const frames = S.project.frames;
+  const fps = 30;
+  const h = window.webkit.messageHandlers.video;
+  showBusy('渲染视频帧…');
+  try {
+    h.postMessage({ cmd: 'begin', count: frames.length, fps: fps, name: safeName() + '.mp4', durations: frames.map(f => f.durationMs || 2000) });
+    for (let i = 0; i < frames.length; i++) {
+      setBusy((i / frames.length) * 0.85, '渲染画板 ' + (i + 1) + ' / ' + frames.length);
+      const c = await renderBoardCanvas(frames[i], 960);
+      const b64 = c.toDataURL('image/jpeg', 0.85).split(',')[1];
+      h.postMessage({ cmd: 'frame', i: i, b64: b64 });
+      await new Promise(r => setTimeout(r, 40));
+    }
+    setBusy(0.92, '原生编码 H.264…');
+    h.postMessage({ cmd: 'end' });
+  } catch (e) { hideBusy(); alert('视频导出失败: ' + e.message); }
 }
 
 /* ---------------- ui sync ---------------- */
@@ -1043,6 +1316,11 @@ function bind() {
     if (m === 'del') { if (confirm('删除当前画板？')) delFrame(); }
     if (m === 'pdf') exportPDF();
     if (m === 'png') exportPNG();
+    if (m === 'gif') exportGIF();
+    if (m === 'video') exportVideo();
+    if (m === 'web') exportWeb();
+    if (m === 'fountain') exportFountain();
+    if (m === 'csv') exportCSV();
     if (m === 'json') exportJSON();
   }));
   $('#fileInput').addEventListener('change', async e => {
@@ -1108,6 +1386,12 @@ async function boot() {
 
   let saved = null;
   try { saved = await dbGet('project'); } catch (_) {}
+  if (window.__nativeProject) {
+    try {
+      const np = JSON.parse(window.__nativeProject);
+      if (!saved || (np.updatedAt || 0) > (saved.updatedAt || 0)) saved = np;
+    } catch (_) {}
+  }
   applyProject(saved || freshProject());
   fit();
   await select(saved ? clamp(+(saved.idx || 0), 0, S.project.frames.length - 1) : 0);
@@ -1119,9 +1403,15 @@ async function boot() {
     const vv = window.visualViewport;
     vv.addEventListener('resize', () => setTimeout(fit, 60));
   }
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  const inNativeShell = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.share);
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !inNativeShell) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+  window.__sbSaveNow = saveNow;
+  window.__sbVideoDone = function (ok) {
+    hideBusy();
+    if (!ok) alert('视频编码失败，试试少几块画板再导一次。');
+  };
   rt.booted = true;
 }
 document.addEventListener('DOMContentLoaded', boot);

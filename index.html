@@ -124,17 +124,32 @@
 <div id="scrim"></div>
 
 <div id="menu-pop" class="hidden">
-  <button data-m="new">New Project</button>
-  <button data-m="import">Import Project JSON</button>
+  <div class="menu-label">Export</div>
+  <button data-m="pdf"><span class="fmt">PDF</span> Storyboard · 多页故事板</button>
+  <button data-m="png"><span class="fmt">PNG</span> Images · 逐帧图片</button>
+  <button data-m="gif"><span class="fmt">GIF</span> Animated · 动图预览</button>
+  <button data-m="video"><span class="fmt">MP4</span> Video · 原生编码</button>
+  <button data-m="web"><span class="fmt">WEB</span> HTML · 可分享网页</button>
+  <button data-m="fountain"><span class="fmt">FTN</span> Fountain 剧本</button>
+  <button data-m="csv"><span class="fmt">CSV</span> Shot List 表格</button>
+  <div class="sep"></div>
+  <div class="menu-label">Project</div>
+  <button data-m="json">导出工程 JSON（备份）</button>
+  <button data-m="import">导入工程 JSON…</button>
   <div class="sep"></div>
   <button data-m="dup">Duplicate Board</button>
   <button data-m="del">Delete Board</button>
-  <div class="sep"></div>
-  <button data-m="pdf">Export PDF</button>
-  <button data-m="png">Export PNG</button>
-  <button data-m="json">Export Project JSON</button>
+  <button data-m="new">New Project</button>
   <div class="sep"></div>
   <label class="menu-check"><input type="checkbox" id="pencilOnly"><span>仅 Apple Pencil 绘制</span></label>
+</div>
+
+<div id="busy" class="hidden">
+  <div class="busy-card">
+    <div class="busy-title">Exporting</div>
+    <div class="busy-text" id="busyText">处理中…</div>
+    <div class="busy-bar"><i id="busyFill"></i></div>
+  </div>
 </div>
 
 <input id="color" type="color" value="#111111" hidden>

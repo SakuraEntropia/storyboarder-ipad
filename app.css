@@ -200,6 +200,20 @@ select{-webkit-appearance:none;appearance:none;width:auto;padding:5px 22px 5px 8
 .menu-check{display:flex;align-items:center;gap:9px;padding:9px 12px;font-size:13px;color:#dcdcdc}
 .menu-check input{width:17px;height:17px;accent-color:#8a8a8a}
 
+
+/* ============ menu extras / busy ============ */
+#menu-pop{max-height:calc(100dvh - 80px);overflow-y:auto;-webkit-overflow-scrolling:touch;min-width:270px}
+.menu-label{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.32);padding:7px 12px 4px}
+#menu-pop button{display:flex;align-items:baseline;gap:10px;font-size:13px;padding:10px 12px}
+#menu-pop button .fmt{font-size:9px;letter-spacing:.08em;color:rgba(255,255,255,.4);min-width:26px}
+#menu-pop button:active{background:rgba(255,255,255,.09)}
+
+#busy{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.busy-card{width:min(360px,80vw);background:#2b2b2b;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:20px 22px;box-shadow:0 16px 50px rgba(0,0,0,.5)}
+.busy-title{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4)}
+.busy-text{margin-top:7px;font-size:14px;color:#e6e6e6}
+.busy-bar{margin-top:14px;height:3px;background:#3d3d3d;overflow:hidden}
+.busy-bar i{display:block;height:100%;width:0;background:#b9b9b9;transition:width .15s ease}
 /* ============ portrait / compact ============ */
 @media (orientation:portrait){
   :root{--side-w:min(330px,88vw)}

@@ -29,13 +29,40 @@ iPadOS 跑不了 Electron，所以这是**按电脑版界面 1:1 还原 + 触控
 
 ## 导出 & 存档
 
-- 右上 `⋯` → **Export PDF**（多页 16:9 故事板，可直接 AirDrop / 存到文件）
-- **Export PNG**（分享面板或打包 zip）、**Export Project JSON**（备份 / 换设备导入）
-- 工程自动保存到 iPad 的 IndexedDB；换设备或清理 Safari 数据前先导出 JSON
+右上 `⋯` 打开导出菜单：
+
+| 格式 | 内容 |
+|---|---|
+| **PDF** | 多页 16:9 故事板，可 AirDrop / 存到「文件」/ 打印 |
+| **PNG** | 逐帧图片；多板自动打包 zip，单板直接给 PNG |
+| **GIF** | 按板时长生成的动图预览（480×270，循环） |
+| **MP4** | 原生 H.264 视频（30fps，按板时长），仅 App 版 |
+| **WEB** | 单文件 HTML：带头图、Action / Dialogue 字幕，可分享给别人直接看 |
+| **Fountain** | `.fountain` 剧本（Action 段落 + Dialogue 居中行 + Notes） |
+| **CSV** | Shot List 表格：Board / Shot / Duration / Dialogue / Action / Notes |
+| **JSON** | 工程备份，可再导入；App 版还会镜像一份到「文件 → Storyboarder」 |
+
+工程自动保存到 IndexedDB（App 版额外写 Documents），换设备前导出一份 JSON。
+
+App 图标与网页版图标均使用上游官方 logo（`build/icon.png`），不是另画的。
 
 ## 快捷键（接键盘时）
 
 `1–7` 选笔 · `[` `]` 笔刷大小 · `O` 洋葱皮 · `G` 网格 · `⌫` 清空画板 · `←/→` 切板 · `空格` 播放 · `⌘Z` / `⇧⌘Z` 撤销重做
+
+
+## 原生 iPad App（Xcode）
+
+`ios/` 里是一个 SwiftUI + WKWebView 的原生壳：所有网页资源打包进 App（完全离线），内置 `127.0.0.1` 本地 HTTP 服务加载页面，并加了原生桥（分享面板导出 PDF/PNG/JSON、工程镜像到「文件」、绘制时防锁屏、全屏隐藏 Home 条）。
+
+```bash
+cd ios
+./build.sh            # 编译（iOS Simulator）
+./build.sh device     # Release 构建 + 打包未签名 ipa
+./build.sh run        # 安装并启动到 iPad 模拟器
+```
+
+安装到真机：打开 `ios/Storyboarder.xcodeproj` → Signing 选自己的 Team → 连 iPad → Run（详见 [ios/README.md](ios/README.md)）。
 
 ## 说明
 
